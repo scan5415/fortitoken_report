@@ -142,14 +142,6 @@ const APIClient = {
     },
 
     // IAM API calls
-    async getCommonData() {
-        return this.request(`${API_CONFIG.iamEndpoint}/accounts/getcommondata`);
-    },
-
-    async getAccountsList(parentId) {
-        return this.request(`${API_CONFIG.iamEndpoint}/accounts/list`, 'POST', { parentId });
-    },
-
     async getAccountDetails(accountId) {
         const attempts = [
             `${API_CONFIG.iamEndpoint}/accounts/list`,
@@ -173,31 +165,38 @@ const APIClient = {
         return this.request(`${API_CONFIG.flexEndpoint}/programs/list`);
     },
 
-    async getProgramPoints(programSerialNumber) {
-        return this.request(`${API_CONFIG.flexEndpoint}/programs/points`, 'POST', {
-            programSerialNumber
-        });
+    async getProgramPoints(programSerialNumber, dateRange = null) {
+        const body = { programSerialNumber };
+        if (dateRange?.startDate) body.startDate = dateRange.startDate;
+        if (dateRange?.endDate) body.endDate = dateRange.endDate;
+        return this.request(`${API_CONFIG.flexEndpoint}/programs/points`, 'POST', body);
     },
 
-    async getConfigsList(programSerialNumber, accountId = null) {
+    async getConfigsList(programSerialNumber, accountId = null, dateRange = null) {
         const body = { programSerialNumber };
         if (accountId) body.accountId = accountId;
+        if (dateRange?.startDate) body.startDate = dateRange.startDate;
+        if (dateRange?.endDate) body.endDate = dateRange.endDate;
         return this.request(`${API_CONFIG.flexEndpoint}/configs/list`, 'POST', body);
     },
 
-    async getEntitlementsList(configId = null, accountId = null, programSerialNumber = null) {
+    async getEntitlementsList(configId = null, accountId = null, programSerialNumber = null, dateRange = null) {
         const body = {};
         if (configId) body.configId = configId;
         if (accountId) body.accountId = accountId;
         if (programSerialNumber) body.programSerialNumber = programSerialNumber;
+        if (dateRange?.startDate) body.startDate = dateRange.startDate;
+        if (dateRange?.endDate) body.endDate = dateRange.endDate;
         return this.request(`${API_CONFIG.flexEndpoint}/entitlements/list`, 'POST', body);
     },
 
-    async getEntitlementPoints(configId = null, accountId = null, programSerialNumber = null) {
+    async getEntitlementPoints(configId = null, accountId = null, programSerialNumber = null, dateRange = null) {
         const body = {};
         if (configId) body.configId = configId;
         if (accountId) body.accountId = accountId;
         if (programSerialNumber) body.programSerialNumber = programSerialNumber;
+        if (dateRange?.startDate) body.startDate = dateRange.startDate;
+        if (dateRange?.endDate) body.endDate = dateRange.endDate;
         return this.request(`${API_CONFIG.flexEndpoint}/entitlements/points`, 'POST', body);
     }
 };
@@ -216,19 +215,25 @@ const DataService = {
         accountDetails: {}
     },
 
-    async loadAllData() {
+    async loadAllData(dateRange = null) {
         try {
-            // Load programs
+            this.data = {
+                accounts: [],
+                programs: [],
+                configurations: {},
+                entitlements: {},
+                pointsData: {},
+                accountDetails: {}
+            };
+
+            App.updateLoadingStatus('Programme werden geladen...', 'FortiFlex-Programme werden abgefragt.');
             const programsResponse = await APIClient.getProgramsList();
             this.data.programs = programsResponse.programs || [];
 
-            // Load accounts
-            //const commonData = await APIClient.getCommonData();
-            //await this.loadAccountsRecursively(commonData.organizationUnits, null);
-
             // Load configurations and entitlements for each program
             for (const program of this.data.programs) {
-                await this.loadProgramData(program);
+                App.updateLoadingStatus(`Konfigurationen werden geladen...`, `Programm ${program.serialNumber} wird verarbeitet.`);
+                await this.loadProgramData(program, dateRange);
             }
 
             return this.data;
@@ -238,29 +243,12 @@ const DataService = {
         }
     },
 
-    async loadAccountsRecursively(ouData, parentId) {
-        if (!ouData) return;
-
-        // Get accounts for this OU
-        try {
-            const accountsResponse = await APIClient.getAccountsList(parentId);
-            if (accountsResponse.accounts) {
-                this.data.accounts.push(...accountsResponse.accounts.map(acc => ({
-                    ...acc,
-                    ouId: parentId
-                })));
-            }
-        } catch (error) {
-            console.warn(`Could not load accounts for OU ${parentId}:`, error);
-        }
-    },
-
-    async loadProgramData(program) {
+    async loadProgramData(program, dateRange = null) {
         const programSerial = program.serialNumber;
         
         try {
-            // Load configurations
-            const configsResponse = await APIClient.getConfigsList(programSerial);
+            App.updateLoadingStatus('Konfigurationen werden geladen...', `Konfigurationen für ${programSerial} werden abgefragt.`);
+            const configsResponse = await APIClient.getConfigsList(programSerial, null, dateRange);
             const configs = configsResponse.configs || [];
             this.data.configurations[programSerial] = configs;
 
@@ -268,18 +256,36 @@ const DataService = {
 
             // Load entitlements and points for each config
             for (const config of configs) {
-                const entitlementsResponse = await APIClient.getEntitlementsList(config.id);
+                App.updateLoadingStatus('Entitlements werden geladen...', `Entitlements für ${config.name} werden verarbeitet.`);
+                const entitlementsResponse = await APIClient.getEntitlementsList(config.id, null, null, dateRange);
                 this.data.entitlements[config.id] = entitlementsResponse.entitlements || [];
 
-                const pointsResponse = await APIClient.getEntitlementPoints(config.id);
-                if (pointsResponse.entitlements) {
-                    this.data.pointsData[config.id] = pointsResponse.entitlements;
+                // Load points with error handling - use empty array on error
+                App.updateLoadingStatus('Verbrauchte Punkte werden berechnet...', `Punkte für ${config.name} werden ausgewertet.`);
+                try {
+                    const pointsResponse = await APIClient.getEntitlementPoints(config.id, null, null, dateRange);
+                    if (pointsResponse.entitlements) {
+                        this.data.pointsData[config.id] = pointsResponse.entitlements;
+                    } else {
+                        this.data.pointsData[config.id] = [];
+                    }
+                } catch (pointsError) {
+                    console.warn(`Could not load points for config ${config.id}:`, pointsError);
+                    // Set empty array so points default to 0
+                    this.data.pointsData[config.id] = [];
                 }
             }
 
-            // Load program points
-            const pointsResponse = await APIClient.getProgramPoints(programSerial);
-            this.data.pointsData[programSerial] = pointsResponse.programs || [];
+            // Load program points with error handling
+            App.updateLoadingStatus('Programm-Punkte werden berechnet...', `Abschluss für ${programSerial}.`);
+            try {
+                const pointsResponse = await APIClient.getProgramPoints(programSerial, dateRange);
+                this.data.pointsData[programSerial] = pointsResponse.programs || [];
+            } catch (programPointsError) {
+                console.warn(`Could not load program points for ${programSerial}:`, programPointsError);
+                // Set empty array so points default to 0
+                this.data.pointsData[programSerial] = [];
+            }
 
         } catch (error) {
             console.warn(`Could not load data for program ${programSerial}:`, error);
@@ -312,9 +318,23 @@ const DataService = {
 // ============================================================================
 
 const UIRenderer = {
-    renderDashboard(data) {
+    renderDashboard(data, dateRange = null) {
+        this.renderDateRangeSummary(dateRange);
         this.renderStats(data);
         this.renderAccountsByOU(data);
+    },
+
+    renderDateRangeSummary(dateRange) {
+        const container = document.getElementById('dateRangeSummary');
+        if (!container) return;
+
+        if (dateRange?.startDate || dateRange?.endDate) {
+            const startLabel = dateRange.startDate ? new Date(`${dateRange.startDate}T00:00:00`).toLocaleDateString('de-DE') : 'keine';
+            const endLabel = dateRange.endDate ? new Date(`${dateRange.endDate}T00:00:00`).toLocaleDateString('de-DE') : 'keine';
+            container.textContent = `Zeitraum: ${startLabel} bis ${endLabel}`;
+        } else {
+            container.textContent = 'Zeitraum: gesamter verfügbarer Zeitraum';
+        }
     },
 
     renderStats(data) {
@@ -325,6 +345,7 @@ const UIRenderer = {
         const totalEntitlements = Object.values(data.entitlements).flat().length;
 
         const totalPoints = this.calculateTotalPoints(data);
+        const roundedTotalPoints = Math.round(totalPoints * 10) / 10;
 
         statsContainer.innerHTML = `
             <div class="stat-card">
@@ -345,127 +366,115 @@ const UIRenderer = {
             </div>
             <div class="stat-card">
                 <div class="stat-label">Gesamtpunkte verbraucht</div>
-                <div class="stat-value">${totalPoints.toLocaleString('de-DE')}</div>
+                <div class="stat-value">${roundedTotalPoints.toLocaleString('de-DE', { minimumFractionDigits: 1, maximumFractionDigits: 1 })}</div>
             </div>
         `;
     },
 
     renderAccountsByOU(data) {
-        const dataContainer = document.getElementById('dataContainer');
-        
+        this.renderFlexTable(data);
+    },
+
+    // -------------------------------------------------------------------------
+    // Table rendering (new table solution to be implemented)
+    // -------------------------------------------------------------------------
+
+    renderFlexTable(data) {
         if (!data.programs || data.programs.length === 0) {
-            dataContainer.innerHTML = '<div class="no-data">Keine Daten verfügbar</div>';
+            document.getElementById('tableBody').innerHTML = 
+                '<tr><td colspan="7" style="text-align: center; padding: 40px; color: #999;">Keine Daten verfügbar</td></tr>';
             return;
         }
 
-        let html = '';
+        // Build hierarchical grouped data structure: Account > Config > Entitlements
+        const groupedData = new Map();
 
         for (const program of data.programs) {
             const programSerial = program.serialNumber;
             const configs = data.configurations[programSerial] || [];
-            
-            const programPoints = this.calculateProgramPoints(data, programSerial);
-            const groupedConfigs = this.groupConfigsByAccount(configs);
-            
-            html += `
-                <div class="ou-section">
-                    <div class="ou-title">
-                        <span>📦 Programm: ${programSerial}</span>
-                        <span class="ou-stats">
-                            ${configs.length} Konfigurationen | 
-                            Punkte: <strong>${programPoints.toLocaleString('de-DE')}</strong>
-                        </span>
-                    </div>
-                    <div>
-            `;
 
-            for (const group of groupedConfigs) {
-                const accountId = group.accountId === 'unassigned' ? 'N/A' : group.accountId;
-                const accountLabel = this.getAccountDisplayName(data, accountId);
-                const accountSummary = `${group.configs.length} Konfigurationen`;
+            for (const config of configs) {
+                const accountId = config.accountId ?? 'unassigned';
+                const accountLabel = this.getAccountDisplayName(data, accountId === 'unassigned' ? 'N/A' : accountId);
+                const entitlements = data.entitlements[config.id] || [];
+                const configName = config.name || 'Unbekannte Konfiguration';
+                const configId = config.id || 'N/A';
+                const productName = config.productType?.name || 'N/A';
+                const status = config.status || 'N/A';
 
-                html += `
-                    <div class="account-group expanded">
-                        <div class="account-group-header">
-                            <span class="toggle-icon">▼</span>
-                            <div class="account-group-heading">
-                                <div class="account-group-title">👤 ${accountLabel}</div>
-                                <div class="account-group-meta">Account ID: ${accountId} • ${accountSummary}</div>
-                            </div>
-                        </div>
-                        <div class="account-group-content">
-                            <div class="config-table-wrapper">
-                                <table class="config-table">
-                                    <thead>
-                                        <tr>
-                                            <th>Konfiguration</th>
-                                            <th>Produkt</th>
-                                            <th>Status</th>
-                                            <th>Entitlements</th>
-                                            <th>Punkte</th>
-                                        </tr>
-                                    </thead>
-                                    <tbody>
-                `;
-
-                for (const config of group.configs) {
-                    const entitlements = data.entitlements[config.id] || [];
-                    const configPoints = this.calculateConfigPoints(data, config.id);
-                    const rowId = `${programSerial}-${config.id}`;
-                    
-                    html += `
-                        <tr class="config-row" data-config-id="${config.id}" data-row-id="${rowId}">
-                            <td>
-                                <div class="config-name">${config.name}</div>
-                                <div class="config-meta">Config ID: ${config.id}</div>
-                            </td>
-                            <td>${config.productType?.name || 'N/A'}</td>
-                            <td><span class="config-status status-active">${config.status}</span></td>
-                            <td>${entitlements.length}</td>
-                            <td>${configPoints.toLocaleString('de-DE')}</td>
-                        </tr>
-                        <tr class="config-detail-row" id="${rowId}" style="display: none;">
-                            <td colspan="5">
-                                ${this.renderEntitlements(entitlements)}
-                            </td>
-                        </tr>
-                    `;
+                // Initialize account group if not exists
+                if (!groupedData.has(accountLabel)) {
+                    groupedData.set(accountLabel, { 
+                        accountId: accountId === 'unassigned' ? 'N/A' : accountId,
+                        configs: new Map(),
+                        accountTotal: 0
+                    });
                 }
 
-                html += `
-                                    </tbody>
-                                </table>
-                            </div>
-                        </div>
-                    </div>
-                `;
-            }
+                const accountGroup = groupedData.get(accountLabel);
 
-            html += `
-                    </div>
-                </div>
-            `;
+                // Get program dates for entitlements
+                const program_data = data.programs.find(p => p.serialNumber === programSerial);
+                const startDate = program_data?.startDate || 'N/A';
+                const endDate = program_data?.endDate || 'N/A';
+
+                // Build entitlements for this config
+                // Get points data for this config (stored separately in pointsData)
+                const configPointsData = data.pointsData[config.id] || [];
+                let configTotal = 0;
+                const configEntitlements = [];
+
+                if (entitlements.length === 0) {
+                    configEntitlements.push({
+                        entitlementSerial: 'N/A',
+                        status: status,
+                        points: 0,
+                        startDate: startDate,
+                        endDate: endDate
+                    });
+                } else {
+                    for (const ent of entitlements) {
+                        // Filter out NOTUSED entitlements
+                        if (ent.tokenStatus === 'NOTUSED') {
+                            continue;
+                        }
+
+                        // Look for matching points data by serial number
+                        const matchingPointsData = configPointsData.find(p => p.serialNumber === ent.serialNumber);
+                        const entitlementPoints = this.getPointValue(matchingPointsData || ent);
+                        configTotal += entitlementPoints;
+                        
+                        // Use entitlement's own status if available, otherwise use config status
+                        const entitlementStatus = ent.status || status;
+                        
+                        configEntitlements.push({
+                            entitlementSerial: ent.serialNumber || 'N/A',
+                            status: entitlementStatus,
+                            points: entitlementPoints,
+                            startDate: startDate,
+                            endDate: endDate,
+                            tokenStatus: ent.tokenStatus
+                        });
+                    }
+                }
+
+                accountGroup.accountTotal += configTotal;
+
+                // Store config with its entitlements
+                accountGroup.configs.set(configId, {
+                    configName: configName,
+                    configId: configId,
+                    productName: productName,
+                    status: status,
+                    entitlements: configEntitlements,
+                    configTotal: configTotal
+                });
+            }
         }
 
-        dataContainer.innerHTML = html;
-        this.attachEventListeners();
-    },
-
-    groupConfigsByAccount(configs) {
-        const groups = new Map();
-
-        for (const config of configs) {
-            const accountId = config.accountId ?? 'unassigned';
-            if (!groups.has(accountId)) {
-                groups.set(accountId, []);
-            }
-            groups.get(accountId).push(config);
-        }
-
-        return Array.from(groups.entries()).map(([accountId, groupedConfigs]) => ({
-            accountId,
-            configs: groupedConfigs
-        }));
+        // Render table
+        TableManager.renderHierarchicalTable(groupedData);
+        TableManager.setupEventListeners();
     },
 
     getAccountDisplayName(data, accountId) {
@@ -486,63 +495,19 @@ const UIRenderer = {
         return fullName || accountDetails.company || `Account ${accountId}`;
     },
 
-    renderEntitlements(entitlements) {
-        if (!entitlements || entitlements.length === 0) {
-            return '<div class="no-data" style="padding: 10px;">Keine Entitlements vorhanden</div>';
+    getPointValue(item) {
+        const candidates = [item?.points, item?.pointBalance, item?.pointConsumption, item?.consumedPoints, item?.consumption, item?.balance];
+        for (const candidate of candidates) {
+            const numericValue = Number(candidate);
+            if (Number.isFinite(numericValue)) {
+                return numericValue;
+            }
         }
-
-        return entitlements.map(ent => `
-            <div class="entitlement-item">
-                <div class="entitlement-serial">🔐 ${ent.serialNumber}</div>
-                <div class="entitlement-info">
-                    <div><strong>Status:</strong> ${ent.status || 'N/A'}</div>
-                    <div><strong>Token:</strong> ${ent.tokenStatus || 'N/A'}</div>
-                    <div><strong>Start:</strong> ${new Date(ent.startDate).toLocaleDateString('de-DE')}</div>
-                    <div><strong>Ende:</strong> ${new Date(ent.endDate).toLocaleDateString('de-DE')}</div>
-                </div>
-                ${ent.description ? `<div style="color: #999; font-size: 12px; margin-top: 5px;">Beschreibung: ${ent.description}</div>` : ''}
-            </div>
-        `).join('');
-    },
-
-    attachEventListeners() {
-        document.querySelectorAll('.account-group-header').forEach(header => {
-            header.addEventListener('click', function() {
-                const group = this.closest('.account-group');
-                const content = group.querySelector('.account-group-content');
-                const isExpanded = group.classList.toggle('expanded');
-                content.style.display = isExpanded ? 'block' : 'none';
-                this.querySelector('.toggle-icon').textContent = isExpanded ? '▼' : '▶';
-            });
-        });
-
-        document.querySelectorAll('.config-row').forEach(row => {
-            row.addEventListener('click', function() {
-                const detailRow = document.getElementById(this.dataset.rowId);
-                const isExpanded = this.classList.toggle('expanded');
-                if (detailRow) {
-                    detailRow.style.display = isExpanded ? 'table-row' : 'none';
-                }
-            });
-        });
+        return 0;
     },
 
     calculateTotalPoints(data) {
-        return Object.values(data.pointsData).flat().reduce((sum, item) => {
-            if (typeof item.points === 'number') return sum + item.points;
-            if (typeof item.pointBalance === 'number') return sum + item.pointBalance;
-            return sum;
-        }, 0);
-    },
-
-    calculateProgramPoints(data, programSerial) {
-        const programData = data.pointsData[programSerial] || [];
-        return programData.reduce((sum, item) => sum + (item.pointBalance || 0), 0);
-    },
-
-    calculateConfigPoints(data, configId) {
-        const configData = data.pointsData[configId] || [];
-        return configData.reduce((sum, item) => sum + (item.points || 0), 0);
+        return Object.values(data.pointsData).flat().reduce((sum, item) => sum + this.getPointValue(item), 0);
     }
 };
 
@@ -552,19 +517,36 @@ const UIRenderer = {
 
 const ExportService = {
     async generateCSV(data) {
-        let csv = 'Programm,Konfiguration,Entitlement Serial,Status,Token Status,Start Datum,End Datum,Beschreibung\n';
+        let csv = 'Account,Konfiguration,Config ID,Entitlement Serial,Produkt,Status,Punkte\n';
 
         for (const program of data.programs) {
-            const configs = data.configurations[program.serialNumber] || [];
+            const programSerial = program.serialNumber;
+            const configs = data.configurations[programSerial] || [];
             
             for (const config of configs) {
+                const accountId = config.accountId ?? 'unassigned';
+                const accountLabel = UIRenderer.getAccountDisplayName(data, accountId === 'unassigned' ? 'N/A' : accountId);
                 const entitlements = data.entitlements[config.id] || [];
+                const configPointsData = data.pointsData[config.id] || [];
                 
                 if (entitlements.length === 0) {
-                    csv += `"${program.serialNumber}","${config.name}","N/A","N/A","N/A","N/A","N/A","N/A"\n`;
+                    csv += `"${accountLabel}","${config.name}","${config.id}","N/A","${config.productType?.name || 'N/A'}","${config.status || 'N/A'}",0\n`;
                 } else {
                     for (const ent of entitlements) {
-                        csv += `"${program.serialNumber}","${config.name}","${ent.serialNumber}","${ent.status || 'N/A'}","${ent.tokenStatus || 'N/A'}","${new Date(ent.startDate).toLocaleDateString('de-DE')}","${new Date(ent.endDate).toLocaleDateString('de-DE')}","${(ent.description || '').replace(/"/g, '""')}"\n`;
+                        // Filter out NOTUSED entitlements
+                        if (ent.tokenStatus === 'NOTUSED') {
+                            continue;
+                        }
+
+                        // Look for matching points data by serial number
+                        const matchingPointsData = configPointsData.find(p => p.serialNumber === ent.serialNumber);
+                        const points = UIRenderer.getPointValue(matchingPointsData || ent);
+                        const roundedPoints = Math.round(points * 10) / 10;
+                        
+                        // Use entitlement's own status if available, otherwise use config status
+                        const entitlementStatus = ent.status || config.status || 'N/A';
+                        
+                        csv += `"${accountLabel}","${config.name}","${config.id}","${ent.serialNumber}","${config.productType?.name || 'N/A'}","${entitlementStatus}","${roundedPoints.toString().replace('.', ',')}\n`;
                     }
                 }
             }
@@ -607,7 +589,7 @@ const ExportService = {
                 </style>
             </head>
             <body>
-                <h1>FortiToken Reporting - Verbrauchsübersicht</h1>
+                <h1>FortiToken Reporting - Entitlements Übersicht</h1>
                 <p style="text-align: center; color: #666;">Generiert am: ${new Date().toLocaleDateString('de-DE')} ${new Date().toLocaleTimeString('de-DE')}</p>
                 
                 <div style="border: 1px solid #ddd; padding: 15px; margin: 20px 0;">
@@ -619,58 +601,88 @@ const ExportService = {
                 </div>
         `;
 
+        // Group by Account and Configuration
+        const groupedData = {};
         for (const program of data.programs) {
-            const configs = data.configurations[program.serialNumber] || [];
-            htmlContent += `<h2>📦 Programm: ${program.serialNumber}</h2>`;
-            htmlContent += `<p><strong>Von:</strong> ${new Date(program.startDate).toLocaleDateString('de-DE')} | <strong>Bis:</strong> ${new Date(program.endDate).toLocaleDateString('de-DE')} | <strong>Support:</strong> ${program.hasSupportCoverage ? 'Ja' : 'Nein'}</p>`;
-
-            htmlContent += `<table>
-                <tr>
-                    <th>Konfiguration</th>
-                    <th>Produkttyp</th>
-                    <th>Status</th>
-                    <th>Entitlements</th>
-                </tr>`;
-
+            const programSerial = program.serialNumber;
+            const configs = data.configurations[programSerial] || [];
+            
             for (const config of configs) {
-                const entitlements = data.entitlements[config.id] || [];
-                htmlContent += `
-                    <tr>
-                        <td>${config.name}</td>
-                        <td>${config.productType?.name || 'N/A'}</td>
-                        <td>${config.status}</td>
-                        <td>${entitlements.length}</td>
-                    </tr>
-                `;
-
-                if (entitlements.length > 0) {
-                    htmlContent += `<tr style="background-color: #f0f0f0;">
-                        <td colspan="4">
-                            <table style="width: 100%; margin: 0; border: none;">
-                                <tr style="border: none;">
-                                    <th style="background: none; color: #333; text-align: left; border-bottom: 1px solid #ddd;">Serial</th>
-                                    <th style="background: none; color: #333; text-align: left; border-bottom: 1px solid #ddd;">Status</th>
-                                    <th style="background: none; color: #333; text-align: left; border-bottom: 1px solid #ddd;">Start</th>
-                                    <th style="background: none; color: #333; text-align: left; border-bottom: 1px solid #ddd;">Ende</th>
-                                </tr>`;
-                    
-                    for (const ent of entitlements) {
-                        htmlContent += `
-                            <tr style="border: none;">
-                                <td style="border: none;">${ent.serialNumber}</td>
-                                <td style="border: none;">${ent.status}</td>
-                                <td style="border: none;">${new Date(ent.startDate).toLocaleDateString('de-DE')}</td>
-                                <td style="border: none;">${new Date(ent.endDate).toLocaleDateString('de-DE')}</td>
-                            </tr>
-                        `;
-                    }
-                    htmlContent += `</table></td></tr>`;
+                const accountId = config.accountId ?? 'unassigned';
+                const accountLabel = UIRenderer.getAccountDisplayName(data, accountId === 'unassigned' ? 'N/A' : accountId);
+                const key = `${accountLabel}|${config.name}`;
+                
+                if (!groupedData[key]) {
+                    groupedData[key] = {
+                        account: accountLabel,
+                        config: config.name,
+                        configId: config.id,
+                        product: config.productType?.name || 'N/A',
+                        status: config.status || 'N/A',
+                        entitlements: data.entitlements[config.id] || []
+                    };
                 }
             }
-
-            htmlContent += `</table>`;
         }
 
+        htmlContent += `<h2>📋 Entitlements nach Account und Konfiguration</h2>`;
+        htmlContent += `<table>
+            <tr>
+                <th>Account</th>
+                <th>Konfiguration</th>
+                <th>Entitlement Serial</th>
+                <th>Produkt</th>
+                <th>Status</th>
+                <th>Punkte</th>
+            </tr>`;
+
+        for (const key in groupedData) {
+            const group = groupedData[key];
+            const entitlements = group.entitlements;
+            const configPointsData = data.pointsData[group.configId] || [];
+            
+            // Filter out NOTUSED entitlements
+            const filteredEntitlements = entitlements.filter(ent => ent.tokenStatus !== 'NOTUSED');
+            
+            if (filteredEntitlements.length === 0) {
+                htmlContent += `
+                    <tr>
+                        <td>${group.account}</td>
+                        <td>${group.config}</td>
+                        <td>N/A</td>
+                        <td>${group.product}</td>
+                        <td>${group.status}</td>
+                        <td>0,0</td>
+                    </tr>
+                `;
+            } else {
+                
+                for (let i = 0; i < filteredEntitlements.length; i++) {
+                    const ent = filteredEntitlements[i];
+                    // Look for matching points data by serial number
+                    const matchingPointsData = configPointsData.find(p => p.serialNumber === ent.serialNumber);
+                    const points = UIRenderer.getPointValue(matchingPointsData || ent);
+                    const roundedPoints = Math.round(points * 10) / 10;
+                    const pointsStr = roundedPoints.toLocaleString('de-DE', { minimumFractionDigits: 1, maximumFractionDigits: 1 });
+                    
+                    // Use entitlement's own status if available, otherwise use config status
+                    const entitlementStatus = ent.status || group.status;
+                    
+                    htmlContent += `
+                        <tr>
+                            ${i === 0 ? `<td rowspan="${filteredEntitlements.length}">${group.account}</td>` : ''}
+                            ${i === 0 ? `<td rowspan="${filteredEntitlements.length}">${group.config}</td>` : ''}
+                            <td>${ent.serialNumber}</td>
+                            ${i === 0 ? `<td rowspan="${filteredEntitlements.length}">${group.product}</td>` : ''}
+                            ${i === 0 ? `<td rowspan="${filteredEntitlements.length}">${entitlementStatus}</td>` : ''}
+                            <td>${pointsStr}</td>
+                        </tr>
+                    `;
+                }
+            }
+        }
+
+        htmlContent += `</table>`;
         htmlContent += `
             </body>
             </html>
@@ -689,8 +701,11 @@ const ExportService = {
 // ============================================================================
 
 const App = {
+    dateRange: null,
+
     init() {
         this.setupEventListeners();
+        this.initializeDateRange();
         this.checkExistingSession();
     },
 
@@ -700,6 +715,36 @@ const App = {
         document.getElementById('logout').addEventListener('click', () => this.handleLogout());
         document.getElementById('exportCSV').addEventListener('click', () => this.handleExportCSV());
         document.getElementById('exportPDF').addEventListener('click', () => this.handleExportPDF());
+        document.getElementById('applyDateRange').addEventListener('click', () => this.handleApplyDateRange());
+    },
+
+    initializeDateRange() {
+        const today = new Date();
+        const firstDayOfMonth = new Date(today.getFullYear(), today.getMonth(), 1);
+        this.dateRange = {
+            startDate: this.formatDateInput(firstDayOfMonth),
+            endDate: this.formatDateInput(today)
+        };
+        this.syncDateRangeInputs();
+    },
+
+    formatDateInput(date) {
+        const year = date.getFullYear();
+        const month = String(date.getMonth() + 1).padStart(2, '0');
+        const day = String(date.getDate()).padStart(2, '0');
+        return `${year}-${month}-${day}`;
+    },
+
+    syncDateRangeInputs() {
+        document.getElementById('startDate').value = this.dateRange?.startDate || '';
+        document.getElementById('endDate').value = this.dateRange?.endDate || '';
+    },
+
+    getDateRangeFromInputs() {
+        return {
+            startDate: document.getElementById('startDate').value || null,
+            endDate: document.getElementById('endDate').value || null
+        };
     },
 
     checkExistingSession() {
@@ -724,7 +769,7 @@ const App = {
                 APIClient.iamTokenExpiry = parseInt(savedIAMTokenExpiry);
             }
             this.showLoginSuccess('Session wiederhergestellt');
-            this.loadDashboard();
+            this.showDashboard();
         }
     },
 
@@ -751,15 +796,27 @@ const App = {
             CookieManager.set('username', username, 30);
             CookieManager.set('password', password, 30);
 
-            this.showLoginSuccess('Authentifizierung erfolgreich! Daten werden geladen...');
-            
-            // Load dashboard data
-            setTimeout(() => this.loadDashboard(), 1000);
+            this.showLoginSuccess('Authentifizierung erfolgreich!');
+            this.showDashboard();
         } catch (error) {
             this.showLoginError(`Fehler: ${error.message}`);
         } finally {
             this.showLoading(false);
         }
+    },
+
+    showDashboard() {
+        this.dateRange = this.getDateRangeFromInputs();
+        UIRenderer.renderDashboard({
+            accounts: [],
+            programs: [],
+            configurations: {},
+            entitlements: {},
+            pointsData: {},
+            accountDetails: {}
+        }, this.dateRange);
+        document.getElementById('loginSection').style.display = 'none';
+        document.getElementById('dashboard').style.display = 'block';
     },
 
     async loadDashboard() {
@@ -778,8 +835,13 @@ const App = {
                 }
             }
 
-            const data = await DataService.loadAllData();
-            UIRenderer.renderDashboard(data);
+            this.dateRange = this.getDateRangeFromInputs();
+            if (this.dateRange.startDate && this.dateRange.endDate && this.dateRange.startDate > this.dateRange.endDate) {
+                throw new Error('Das Startdatum darf nicht nach dem Enddatum liegen.');
+            }
+
+            const data = await DataService.loadAllData(this.dateRange);
+            UIRenderer.renderDashboard(data, this.dateRange);
             
             // Store data for export
             this.currentData = data;
@@ -794,6 +856,15 @@ const App = {
         } finally {
             this.showLoading(false);
         }
+    },
+
+    handleApplyDateRange() {
+        this.dateRange = this.getDateRangeFromInputs();
+        if (this.dateRange.startDate && this.dateRange.endDate && this.dateRange.startDate > this.dateRange.endDate) {
+            this.showLoginError('Das Startdatum darf nicht nach dem Enddatum liegen.');
+            return;
+        }
+        this.loadDashboard();
     },
 
     handleClearCookies() {
@@ -837,6 +908,16 @@ const App = {
 
     showLoading(show) {
         document.getElementById('loading').style.display = show ? 'block' : 'none';
+        if (!show) {
+            this.updateLoadingStatus('Authentifizierung läuft...', 'Bitte warten Sie kurz.');
+        }
+    },
+
+    updateLoadingStatus(status, substatus = 'Bitte warten Sie kurz.') {
+        const statusEl = document.getElementById('loadingStatus');
+        const substatusEl = document.getElementById('loadingSubstatus');
+        if (statusEl) statusEl.textContent = status;
+        if (substatusEl) substatusEl.textContent = substatus;
     },
 
     showLoginError(message) {
@@ -862,6 +943,223 @@ const App = {
 
 // ============================================================================
 // Initialize Application
+// ============================================================================
+// Table Manager
+// ============================================================================
+
+const TableManager = {
+    allAccountsExpanded: true,
+    allConfigsExpanded: true,
+    currentData: null,
+
+    renderHierarchicalTable(groupedData) {
+        const tbody = document.getElementById('tableBody');
+        tbody.innerHTML = '';
+
+        if (groupedData.size === 0) {
+            tbody.innerHTML = '<tr><td colspan="8" style="text-align: center; padding: 40px; color: #999;">Keine Daten verfügbar</td></tr>';
+            return;
+        }
+
+        this.currentData = groupedData;
+
+        let accountIndex = 0;
+        for (const [accountLabel, accountGroup] of groupedData) {
+            const accountId = `account-${accountIndex}`;
+
+            // ============ ACCOUNT HEADER ROW ============
+            const accountHeaderRow = document.createElement('tr');
+            accountHeaderRow.className = 'account-header-row';
+            accountHeaderRow.setAttribute('data-account-id', accountId);
+            accountHeaderRow.setAttribute('onclick', `TableManager.toggleAccount('${accountId}')`);
+            accountHeaderRow.innerHTML = `
+                <td>
+                    <span class="group-toggle">▼</span>
+                    <strong>🏢 ${accountLabel}</strong>
+                </td>
+                <td><code>${accountGroup.accountId}</code></td>
+                <td colspan="5"></td>
+                <td>${this.formatPoints(accountGroup.accountTotal)}</td>
+            `;
+            tbody.appendChild(accountHeaderRow);
+
+            // ============ CONFIGURATION ROWS ============
+            let configIndex = 0;
+            for (const [configId, configData] of accountGroup.configs) {
+                const configGroupId = `${accountId}-config-${configIndex}`;
+
+                // Config Header Row
+                const configHeaderRow = document.createElement('tr');
+                configHeaderRow.className = `config-header-row ${accountId}`;
+                configHeaderRow.setAttribute('data-config-id', configGroupId);
+                configHeaderRow.setAttribute('onclick', `TableManager.toggleConfig('${configGroupId}')`);
+                configHeaderRow.innerHTML = `
+                    <td>
+                        <span class="group-toggle">▼</span>
+                        ${configData.configName}
+                    </td>
+                    <td><code>${configData.configId}</code></td>
+                    <td>${configData.productName}</td>
+                    <td colspan="4"></td>
+                    <td>${this.formatPoints(configData.configTotal)}</td>
+                `;
+                tbody.appendChild(configHeaderRow);
+
+                // ============ ENTITLEMENT ROWS ============
+                for (const entitlement of configData.entitlements) {
+                    const entitlementRow = document.createElement('tr');
+                    entitlementRow.className = `entitlement-row ${accountId} ${configGroupId}`;
+                    entitlementRow.setAttribute('data-status', entitlement.status);
+                    entitlementRow.innerHTML = `
+                        <td>${configData.configName}</td>
+                        <td><code>${configData.configId}</code></td>
+                        <td>${configData.productName}</td>
+                        <td><code>${entitlement.entitlementSerial}</code></td>
+                        <td>${this.getStatusBadge(entitlement.status)}</td>
+                        <td>${entitlement.startDate}</td>
+                        <td>${entitlement.endDate}</td>
+                        <td>${this.formatPoints(entitlement.points)}</td>
+                    `;
+                    tbody.appendChild(entitlementRow);
+                }
+
+                configIndex++;
+            }
+
+            accountIndex++;
+        }
+    },
+
+    getStatusBadge(status) {
+        const classes = {
+            'ACTIVE': 'status-active',
+            'PENDING': 'status-pending',
+            'INACTIVE': 'status-inactive'
+        };
+        const className = classes[status] || 'status-inactive';
+        return `<span class="status-badge ${className}">${status}</span>`;
+    },
+
+    formatPoints(points) {
+        if (points === undefined || points === null) return '-';
+        const rounded = Math.round(points * 10) / 10;
+        return `<span class="points-badge">${rounded.toLocaleString('de-DE', { minimumFractionDigits: 1, maximumFractionDigits: 1 })} Pts</span>`;
+    },
+
+    toggleAccount(accountId) {
+        // Toggle all config headers and entitlements for this account
+        const configHeaders = document.querySelectorAll(`.config-header-row.${accountId}`);
+        const entitlements = document.querySelectorAll(`.entitlement-row.${accountId}`);
+        const accountHeader = document.querySelector(`[data-account-id="${accountId}"]`);
+        const toggle = accountHeader.querySelector('.group-toggle');
+
+        const isHidden = configHeaders[0]?.style.display === 'none';
+        configHeaders.forEach(row => row.style.display = isHidden ? '' : 'none');
+        entitlements.forEach(row => row.style.display = isHidden ? '' : 'none');
+        toggle.classList.toggle('collapsed', !isHidden);
+    },
+
+    toggleConfig(configGroupId) {
+        // Toggle entitlements for this config
+        const entitlements = document.querySelectorAll(`.${configGroupId}`);
+        const configHeader = document.querySelector(`[data-config-id="${configGroupId}"]`);
+        const toggle = configHeader.querySelector('.group-toggle');
+
+        const isHidden = entitlements[0]?.style.display === 'none';
+        entitlements.forEach(row => row.style.display = isHidden ? '' : 'none');
+        toggle.classList.toggle('collapsed', !isHidden);
+    },
+
+    toggleAllAccounts() {
+        this.allAccountsExpanded = !this.allAccountsExpanded;
+        const accountHeaders = document.querySelectorAll('.account-header-row');
+
+        accountHeaders.forEach(accountHeader => {
+            const accountId = accountHeader.getAttribute('data-account-id');
+            const configHeaders = document.querySelectorAll(`.config-header-row.${accountId}`);
+            const entitlements = document.querySelectorAll(`.entitlement-row.${accountId}`);
+            const toggle = accountHeader.querySelector('.group-toggle');
+
+            configHeaders.forEach(row => row.style.display = this.allAccountsExpanded ? '' : 'none');
+            entitlements.forEach(row => row.style.display = this.allAccountsExpanded ? '' : 'none');
+            toggle.classList.toggle('collapsed', !this.allAccountsExpanded);
+        });
+    },
+
+    toggleAllConfigs() {
+        this.allConfigsExpanded = !this.allConfigsExpanded;
+        const configHeaders = document.querySelectorAll('.config-header-row');
+
+        configHeaders.forEach(configHeader => {
+            const configGroupId = configHeader.getAttribute('data-config-id');
+            const entitlements = document.querySelectorAll(`.${configGroupId}`);
+            const toggle = configHeader.querySelector('.group-toggle');
+
+            entitlements.forEach(row => row.style.display = this.allConfigsExpanded ? '' : 'none');
+            toggle.classList.toggle('collapsed', !this.allConfigsExpanded);
+        });
+    },
+
+    setupEventListeners() {
+        const searchInput = document.getElementById('tableSearch');
+        const statusFilter = document.getElementById('statusFilterTable');
+
+        if (searchInput) {
+            searchInput.addEventListener('input', () => this.filterTable());
+        }
+
+        if (statusFilter) {
+            statusFilter.addEventListener('change', () => this.filterTable());
+        }
+    },
+
+    filterTable() {
+        const searchValue = document.getElementById('tableSearch')?.value.toLowerCase() || '';
+        const statusValue = document.getElementById('statusFilterTable')?.value || '';
+
+        // Filter entitlements
+        const entitlementRows = document.querySelectorAll('.entitlement-row');
+        const visibleConfigs = new Set();
+        const visibleAccounts = new Set();
+
+        entitlementRows.forEach(row => {
+            const status = row.getAttribute('data-status');
+            const text = row.textContent.toLowerCase();
+
+            const matchesSearch = !searchValue || text.includes(searchValue);
+            const matchesStatus = !statusValue || status === statusValue;
+
+            if (matchesSearch && matchesStatus) {
+                row.style.display = '';
+                // Track which configs and accounts have visible rows
+                const classes = row.className.split(' ');
+                classes.forEach(cls => {
+                    if (cls.startsWith('account-')) visibleAccounts.add(cls);
+                    if (cls.includes('config')) visibleConfigs.add(cls);
+                });
+            } else {
+                row.style.display = 'none';
+            }
+        });
+
+        // Show/hide config headers based on visible entitlements
+        const configHeaders = document.querySelectorAll('.config-header-row');
+        configHeaders.forEach(header => {
+            const configGroupId = header.getAttribute('data-config-id');
+            const hasVisibleEntitlements = Array.from(visibleConfigs).some(cls => configGroupId.includes(cls.replace('entitlement-row ', '')));
+            header.style.display = hasVisibleEntitlements ? '' : 'none';
+        });
+
+        // Show/hide account headers based on visible configs
+        const accountHeaders = document.querySelectorAll('.account-header-row');
+        accountHeaders.forEach(header => {
+            const accountId = header.getAttribute('data-account-id');
+            const hasVisibleConfigs = Array.from(visibleAccounts).some(cls => cls === accountId);
+            header.style.display = hasVisibleConfigs ? '' : 'none';
+        });
+    }
+};
+
 // ============================================================================
 
 document.addEventListener('DOMContentLoaded', () => {
