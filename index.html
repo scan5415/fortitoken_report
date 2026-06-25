@@ -223,11 +223,101 @@
             color: #666;
         }
 
+        .account-group {
+            margin-bottom: 20px;
+            background: #f8f9fa;
+            border: 1px solid #e2e8f0;
+            border-radius: 8px;
+            overflow: hidden;
+        }
+
+        .account-group-header {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            padding: 14px 16px;
+            cursor: pointer;
+            background: #eef2ff;
+            border-bottom: 1px solid #e2e8f0;
+        }
+
+        .account-group-heading {
+            display: flex;
+            flex-direction: column;
+            gap: 3px;
+        }
+
+        .account-group-title {
+            font-size: 15px;
+            font-weight: 700;
+            color: #4c51bf;
+        }
+
+        .account-group-meta {
+            font-size: 12px;
+            color: #666;
+        }
+
+        .account-group-content {
+            display: block;
+            padding: 12px 14px 14px;
+        }
+
+        .config-table-wrapper {
+            overflow-x: auto;
+        }
+
+        .config-table {
+            width: 100%;
+            border-collapse: collapse;
+            background: white;
+            border-radius: 6px;
+            overflow: hidden;
+        }
+
+        .config-table th,
+        .config-table td {
+            padding: 10px 12px;
+            text-align: left;
+            border-bottom: 1px solid #e2e8f0;
+            font-size: 13px;
+        }
+
+        .config-table th {
+            background: #f1f5f9;
+            color: #334155;
+            font-weight: 700;
+        }
+
+        .config-row {
+            cursor: pointer;
+            transition: background 0.2s ease;
+        }
+
+        .config-row:hover {
+            background: #f8fafc;
+        }
+
+        .config-name {
+            font-weight: 600;
+            color: #1f2937;
+        }
+
+        .config-meta {
+            font-size: 12px;
+            color: #64748b;
+            margin-top: 3px;
+        }
+
+        .config-detail-row td {
+            background: #fbfdff;
+            padding: 0 12px 12px;
+        }
+
         .account-card {
             background: #f8f9fa;
             border-left: 4px solid #667eea;
             padding: 15px;
-            margin-bottom: 15px;
             border-radius: 5px;
             cursor: pointer;
             transition: all 0.3s;

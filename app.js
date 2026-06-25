@@ -4,10 +4,12 @@
 // ============================================================================
 
 const API_CONFIG = {
+    worker_url: 'https://square-bonus-5ac2.ofee42.workers.dev/',
     authEndpoint: 'https://customerapiauth.fortinet.com/api/v1/oauth/token/',
     iamEndpoint: 'https://support.fortinet.com/es/api/iam/v1',
     flexEndpoint: 'https://support.fortinet.com/es/api/fortiflex/v2',
     clientId: 'flexvm',
+    iamClientId: 'iam',
     grantType: 'password'
 };
 
@@ -42,6 +44,8 @@ const CookieManager = {
         this.delete('password');
         this.delete('token');
         this.delete('tokenExpiry');
+        this.delete('iamToken');
+        this.delete('iamTokenExpiry');
     }
 };
 
@@ -52,10 +56,14 @@ const CookieManager = {
 const APIClient = {
     token: null,
     tokenExpiry: null,
+    iamToken: null,
+    iamTokenExpiry: null,
 
-    async getToken(username, password) {
+    async getToken(username, password, clientId = API_CONFIG.clientId) {
         try {
-            const response = await fetch(API_CONFIG.authEndpoint, {
+            const response = await fetch(
+                `${API_CONFIG.worker_url}?target=${encodeURIComponent(API_CONFIG.authEndpoint)}`,
+                {
                 method: 'POST',
                 headers: {
                     'Content-Type': 'application/json'
@@ -63,7 +71,7 @@ const APIClient = {
                 body: JSON.stringify({
                     username: username,
                     password: password,
-                    client_id: API_CONFIG.clientId,
+                    client_id: clientId,
                     grant_type: API_CONFIG.grantType
                 })
             });
@@ -73,29 +81,42 @@ const APIClient = {
             }
 
             const data = await response.json();
-            this.token = data.access_token;
-            this.tokenExpiry = Date.now() + (data.expires_in * 1000);
+            const token = data.access_token;
+            const tokenExpiry = Date.now() + (data.expires_in * 1000);
+
+            if (clientId === API_CONFIG.iamClientId) {
+                this.iamToken = token;
+                this.iamTokenExpiry = tokenExpiry;
+                CookieManager.set('iamToken', token, 7);
+                CookieManager.set('iamTokenExpiry', tokenExpiry.toString(), 7);
+            } else {
+                this.token = token;
+                this.tokenExpiry = tokenExpiry;
+                CookieManager.set('token', token, 7);
+                CookieManager.set('tokenExpiry', tokenExpiry.toString(), 7);
+            }
             
-            // Save token to cookie
-            CookieManager.set('token', this.token, 7);
-            CookieManager.set('tokenExpiry', this.tokenExpiry.toString(), 7);
-            
-            return this.token;
+            return token;
         } catch (error) {
             console.error('Token retrieval error:', error);
             throw error;
         }
     },
 
-    async request(endpoint, method = 'POST', body = {}) {
-        if (!this.token) {
+    async getIAMToken(username, password) {
+        return this.getToken(username, password, API_CONFIG.iamClientId);
+    },
+
+    async request(endpoint, method = 'POST', body = {}, tokenType = 'flex') {
+        const token = tokenType === 'iam' ? this.iamToken : this.token;
+        if (!token) {
             throw new Error('No token available');
         }
 
         const options = {
             method: method,
             headers: {
-                'Authorization': `Bearer ${this.token}`,
+                'Authorization': `Bearer ${token}`,
                 'Content-Type': 'application/json'
             }
         };
@@ -104,7 +125,9 @@ const APIClient = {
             options.body = JSON.stringify(body);
         }
 
-        const response = await fetch(endpoint, options);
+        const response = await fetch(
+            `${API_CONFIG.worker_url}?target=${encodeURIComponent(endpoint)}`,
+            options);
 
         if (response.status === 401) {
             throw new Error('Token expired or invalid');
@@ -125,6 +148,24 @@ const APIClient = {
 
     async getAccountsList(parentId) {
         return this.request(`${API_CONFIG.iamEndpoint}/accounts/list`, 'POST', { parentId });
+    },
+
+    async getAccountDetails(accountId) {
+        const attempts = [
+            `${API_CONFIG.iamEndpoint}/accounts/list`,
+            `${API_CONFIG.iamEndpoint}/accounts/lists`
+        ];
+
+        let lastError = null;
+        for (const endpoint of attempts) {
+            try {
+                return await this.request(endpoint, 'POST', { accountId }, 'iam');
+            } catch (error) {
+                lastError = error;
+            }
+        }
+
+        throw lastError || new Error('Account lookup failed');
     },
 
     // FortiFlex API calls
@@ -171,7 +212,8 @@ const DataService = {
         programs: [],
         configurations: {},
         entitlements: {},
-        pointsData: {}
+        pointsData: {},
+        accountDetails: {}
     },
 
     async loadAllData() {
@@ -181,8 +223,8 @@ const DataService = {
             this.data.programs = programsResponse.programs || [];
 
             // Load accounts
-            const commonData = await APIClient.getCommonData();
-            await this.loadAccountsRecursively(commonData.organizationUnits, null);
+            //const commonData = await APIClient.getCommonData();
+            //await this.loadAccountsRecursively(commonData.organizationUnits, null);
 
             // Load configurations and entitlements for each program
             for (const program of this.data.programs) {
@@ -219,10 +261,13 @@ const DataService = {
         try {
             // Load configurations
             const configsResponse = await APIClient.getConfigsList(programSerial);
-            this.data.configurations[programSerial] = configsResponse.configs || [];
+            const configs = configsResponse.configs || [];
+            this.data.configurations[programSerial] = configs;
+
+            await this.loadAccountDetails(configs);
 
             // Load entitlements and points for each config
-            for (const config of this.data.configurations[programSerial]) {
+            for (const config of configs) {
                 const entitlementsResponse = await APIClient.getEntitlementsList(config.id);
                 this.data.entitlements[config.id] = entitlementsResponse.entitlements || [];
 
@@ -238,6 +283,26 @@ const DataService = {
 
         } catch (error) {
             console.warn(`Could not load data for program ${programSerial}:`, error);
+        }
+    },
+
+    async loadAccountDetails(configs) {
+        const accountIds = [...new Set((configs || [])
+            .map(config => config.accountId)
+            .filter(Boolean))];
+
+        for (const accountId of accountIds) {
+            if (this.data.accountDetails[accountId]) continue;
+
+            try {
+                const accountResponse = await APIClient.getAccountDetails(accountId);
+                const accounts = accountResponse.accounts || [];
+                if (accounts.length > 0) {
+                    this.data.accountDetails[accountId] = accounts[0];
+                }
+            } catch (error) {
+                console.warn(`Could not load account details for ${accountId}:`, error);
+            }
         }
     }
 };
@@ -300,6 +365,7 @@ const UIRenderer = {
             const configs = data.configurations[programSerial] || [];
             
             const programPoints = this.calculateProgramPoints(data, programSerial);
+            const groupedConfigs = this.groupConfigsByAccount(configs);
             
             html += `
                 <div class="ou-section">
@@ -313,27 +379,63 @@ const UIRenderer = {
                     <div>
             `;
 
-            for (const config of configs) {
-                const entitlements = data.entitlements[config.id] || [];
-                const configPoints = this.calculateConfigPoints(data, config.id);
-                
+            for (const group of groupedConfigs) {
+                const accountId = group.accountId === 'unassigned' ? 'N/A' : group.accountId;
+                const accountLabel = this.getAccountDisplayName(data, accountId);
+                const accountSummary = `${group.configs.length} Konfigurationen`;
+
                 html += `
-                    <div class="account-card" data-config-id="${config.id}">
-                        <div class="account-header">
-                            <div>
-                                <div class="account-name">
-                                    <span class="toggle-icon">▶</span>
-                                    ${config.name}
-                                </div>
-                                <div class="account-id">Config ID: ${config.id} | Produkt: ${config.productType?.name || 'N/A'} | Status: ${config.status}</div>
-                            </div>
-                            <div>
-                                <span class="config-status status-active">${entitlements.length} Entitlements</span>
-                                <span class="account-points">${configPoints.toLocaleString('de-DE')} Punkte</span>
+                    <div class="account-group expanded">
+                        <div class="account-group-header">
+                            <span class="toggle-icon">▼</span>
+                            <div class="account-group-heading">
+                                <div class="account-group-title">👤 ${accountLabel}</div>
+                                <div class="account-group-meta">Account ID: ${accountId} • ${accountSummary}</div>
                             </div>
                         </div>
-                        <div class="config-list">
-                            ${this.renderEntitlements(entitlements)}
+                        <div class="account-group-content">
+                            <div class="config-table-wrapper">
+                                <table class="config-table">
+                                    <thead>
+                                        <tr>
+                                            <th>Konfiguration</th>
+                                            <th>Produkt</th>
+                                            <th>Status</th>
+                                            <th>Entitlements</th>
+                                            <th>Punkte</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody>
+                `;
+
+                for (const config of group.configs) {
+                    const entitlements = data.entitlements[config.id] || [];
+                    const configPoints = this.calculateConfigPoints(data, config.id);
+                    const rowId = `${programSerial}-${config.id}`;
+                    
+                    html += `
+                        <tr class="config-row" data-config-id="${config.id}" data-row-id="${rowId}">
+                            <td>
+                                <div class="config-name">${config.name}</div>
+                                <div class="config-meta">Config ID: ${config.id}</div>
+                            </td>
+                            <td>${config.productType?.name || 'N/A'}</td>
+                            <td><span class="config-status status-active">${config.status}</span></td>
+                            <td>${entitlements.length}</td>
+                            <td>${configPoints.toLocaleString('de-DE')}</td>
+                        </tr>
+                        <tr class="config-detail-row" id="${rowId}" style="display: none;">
+                            <td colspan="5">
+                                ${this.renderEntitlements(entitlements)}
+                            </td>
+                        </tr>
+                    `;
+                }
+
+                html += `
+                                    </tbody>
+                                </table>
+                            </div>
                         </div>
                     </div>
                 `;
@@ -347,6 +449,41 @@ const UIRenderer = {
 
         dataContainer.innerHTML = html;
         this.attachEventListeners();
+    },
+
+    groupConfigsByAccount(configs) {
+        const groups = new Map();
+
+        for (const config of configs) {
+            const accountId = config.accountId ?? 'unassigned';
+            if (!groups.has(accountId)) {
+                groups.set(accountId, []);
+            }
+            groups.get(accountId).push(config);
+        }
+
+        return Array.from(groups.entries()).map(([accountId, groupedConfigs]) => ({
+            accountId,
+            configs: groupedConfigs
+        }));
+    },
+
+    getAccountDisplayName(data, accountId) {
+        if (!accountId || accountId === 'N/A') {
+            return 'Unbekannt';
+        }
+
+        const accountDetails = data.accountDetails?.[accountId];
+        if (!accountDetails) {
+            return `Account ${accountId}`;
+        }
+
+        const fullName = [accountDetails.firstName, accountDetails.lastName]
+            .filter(Boolean)
+            .join(' ')
+            .trim();
+
+        return fullName || accountDetails.company || `Account ${accountId}`;
     },
 
     renderEntitlements(entitlements) {
@@ -369,12 +506,22 @@ const UIRenderer = {
     },
 
     attachEventListeners() {
-        document.querySelectorAll('.account-card').forEach(card => {
-            card.addEventListener('click', function(e) {
-                if (e.target.closest('.toggle-icon') || !e.target.closest('.account-points')) {
-                    this.classList.toggle('expanded');
-                    this.querySelector('.config-list').style.display = 
-                        this.classList.contains('expanded') ? 'block' : 'none';
+        document.querySelectorAll('.account-group-header').forEach(header => {
+            header.addEventListener('click', function() {
+                const group = this.closest('.account-group');
+                const content = group.querySelector('.account-group-content');
+                const isExpanded = group.classList.toggle('expanded');
+                content.style.display = isExpanded ? 'block' : 'none';
+                this.querySelector('.toggle-icon').textContent = isExpanded ? '▼' : '▶';
+            });
+        });
+
+        document.querySelectorAll('.config-row').forEach(row => {
+            row.addEventListener('click', function() {
+                const detailRow = document.getElementById(this.dataset.rowId);
+                const isExpanded = this.classList.toggle('expanded');
+                if (detailRow) {
+                    detailRow.style.display = isExpanded ? 'table-row' : 'none';
                 }
             });
         });
@@ -566,9 +713,16 @@ const App = {
             document.getElementById('password').value = savedPassword;
         }
 
+        const savedIAMToken = CookieManager.get('iamToken');
+        const savedIAMTokenExpiry = CookieManager.get('iamTokenExpiry');
+
         if (savedToken && savedTokenExpiry && Date.now() < parseInt(savedTokenExpiry)) {
             APIClient.token = savedToken;
             APIClient.tokenExpiry = parseInt(savedTokenExpiry);
+            if (savedIAMToken && savedIAMTokenExpiry && Date.now() < parseInt(savedIAMTokenExpiry)) {
+                APIClient.iamToken = savedIAMToken;
+                APIClient.iamTokenExpiry = parseInt(savedIAMTokenExpiry);
+            }
             this.showLoginSuccess('Session wiederhergestellt');
             this.loadDashboard();
         }
@@ -589,8 +743,9 @@ const App = {
         this.clearMessages();
 
         try {
-            // Get token
+            // Get tokens for Flex and IAM
             await APIClient.getToken(username, password);
+            await APIClient.getIAMToken(username, password);
             
             // Save credentials to cookie
             CookieManager.set('username', username, 30);
@@ -612,6 +767,17 @@ const App = {
         this.clearMessages();
 
         try {
+            const username = document.getElementById('username').value.trim() || CookieManager.get('username');
+            const password = document.getElementById('password').value.trim() || CookieManager.get('password');
+
+            if (username && password) {
+                try {
+                    await APIClient.getIAMToken(username, password);
+                } catch (error) {
+                    console.warn('Could not refresh IAM token:', error);
+                }
+            }
+
             const data = await DataService.loadAllData();
             UIRenderer.renderDashboard(data);
             
