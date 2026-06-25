@@ -507,7 +507,32 @@ const UIRenderer = {
     },
 
     calculateTotalPoints(data) {
-        return Object.values(data.pointsData).flat().reduce((sum, item) => sum + this.getPointValue(item), 0);
+        let total = 0;
+        
+        // Iterate through all configurations and sum only non-NOTUSED entitlements
+        for (const program of data.programs) {
+            const programSerial = program.serialNumber;
+            const configs = data.configurations[programSerial] || [];
+            
+            for (const config of configs) {
+                const entitlements = data.entitlements[config.id] || [];
+                const configPointsData = data.pointsData[config.id] || [];
+                
+                for (const ent of entitlements) {
+                    // Skip NOTUSED entitlements
+                    if (ent.tokenStatus === 'NOTUSED') {
+                        continue;
+                    }
+                    
+                    // Look for matching points data by serial number
+                    const matchingPointsData = configPointsData.find(p => p.serialNumber === ent.serialNumber);
+                    const points = this.getPointValue(matchingPointsData || ent);
+                    total += points;
+                }
+            }
+        }
+        
+        return total;
     }
 };
 
