@@ -226,13 +226,13 @@ const DataService = {
                 accountDetails: {}
             };
 
-            App.updateLoadingStatus('Programme werden geladen...', 'FortiFlex-Programme werden abgefragt.');
+            App.updateLoadingStatus('Loading programs...', 'Fetching FortiFlex programs.');
             const programsResponse = await APIClient.getProgramsList();
             this.data.programs = programsResponse.programs || [];
 
             // Load configurations and entitlements for each program
             for (const program of this.data.programs) {
-                App.updateLoadingStatus(`Konfigurationen werden geladen...`, `Programm ${program.serialNumber} wird verarbeitet.`);
+                App.updateLoadingStatus(`Loading configurations...`, `Program ${program.serialNumber} is being processed.`);
                 await this.loadProgramData(program, dateRange);
             }
 
@@ -247,7 +247,7 @@ const DataService = {
         const programSerial = program.serialNumber;
         
         try {
-            App.updateLoadingStatus('Konfigurationen werden geladen...', `Konfigurationen für ${programSerial} werden abgefragt.`);
+            App.updateLoadingStatus('Loading configurations...', `Configurations for ${programSerial} are being fetched.`);
             const configsResponse = await APIClient.getConfigsList(programSerial, null, dateRange);
             const configs = configsResponse.configs || [];
             this.data.configurations[programSerial] = configs;
@@ -256,12 +256,12 @@ const DataService = {
 
             // Load entitlements and points for each config
             for (const config of configs) {
-                App.updateLoadingStatus('Entitlements werden geladen...', `Entitlements für ${config.name} werden verarbeitet.`);
+                App.updateLoadingStatus('Loading entitlements...', `Entitlements for ${config.name} are being processed.`);
                 const entitlementsResponse = await APIClient.getEntitlementsList(config.id, null, null, dateRange);
                 this.data.entitlements[config.id] = entitlementsResponse.entitlements || [];
 
                 // Load points with error handling - use empty array on error
-                App.updateLoadingStatus('Verbrauchte Punkte werden berechnet...', `Punkte für ${config.name} werden ausgewertet.`);
+                App.updateLoadingStatus('Calculating consumed points...', `Points for ${config.name} are being evaluated.`);
                 try {
                     const pointsResponse = await APIClient.getEntitlementPoints(config.id, null, null, dateRange);
                     if (pointsResponse.entitlements) {
@@ -277,7 +277,7 @@ const DataService = {
             }
 
             // Load program points with error handling
-            App.updateLoadingStatus('Programm-Punkte werden berechnet...', `Abschluss für ${programSerial}.`);
+            App.updateLoadingStatus('Calculating program points...', `Finalizing for ${programSerial}.`);
             try {
                 const pointsResponse = await APIClient.getProgramPoints(programSerial, dateRange);
                 this.data.pointsData[programSerial] = pointsResponse.programs || [];
@@ -349,15 +349,15 @@ const UIRenderer = {
 
         statsContainer.innerHTML = `
             <div class="stat-card">
-                <div class="stat-label">Gesamtzahl Accounts</div>
+                <div class="stat-label">Total Accounts</div>
                 <div class="stat-value">${totalAccounts}</div>
             </div>
             <div class="stat-card">
-                <div class="stat-label">FortiFlex Programme</div>
+                <div class="stat-label">FortiFlex Programs</div>
                 <div class="stat-value">${totalPrograms}</div>
             </div>
             <div class="stat-card">
-                <div class="stat-label">Konfigurationen</div>
+                <div class="stat-label">Configurations</div>
                 <div class="stat-value">${totalConfigs}</div>
             </div>
             <div class="stat-card">
@@ -365,7 +365,7 @@ const UIRenderer = {
                 <div class="stat-value">${totalEntitlements}</div>
             </div>
             <div class="stat-card">
-                <div class="stat-label">Gesamtpunkte verbraucht</div>
+                <div class="stat-label">Total Points Consumed</div>
                 <div class="stat-value">${roundedTotalPoints.toLocaleString('de-DE', { minimumFractionDigits: 1, maximumFractionDigits: 1 })}</div>
             </div>
         `;
@@ -382,7 +382,7 @@ const UIRenderer = {
     renderFlexTable(data) {
         if (!data.programs || data.programs.length === 0) {
             document.getElementById('tableBody').innerHTML = 
-                '<tr><td colspan="7" style="text-align: center; padding: 40px; color: #999;">Keine Daten verfügbar</td></tr>';
+                '<tr><td colspan="7" style="text-align: center; padding: 40px; color: #999;">No data available</td></tr>';
             return;
         }
 
@@ -397,7 +397,7 @@ const UIRenderer = {
                 const accountId = config.accountId ?? 'unassigned';
                 const accountLabel = this.getAccountDisplayName(data, accountId === 'unassigned' ? 'N/A' : accountId);
                 const entitlements = data.entitlements[config.id] || [];
-                const configName = config.name || 'Unbekannte Konfiguration';
+                const configName = config.name || 'Unknown Configuration';
                 const configId = config.id || 'N/A';
                 const productName = config.productType?.name || 'N/A';
                 const status = config.status || 'N/A';
@@ -479,7 +479,7 @@ const UIRenderer = {
 
     getAccountDisplayName(data, accountId) {
         if (!accountId || accountId === 'N/A') {
-            return 'Unbekannt';
+            return 'Unknown';
         }
 
         const accountDetails = data.accountDetails?.[accountId];
@@ -542,7 +542,7 @@ const UIRenderer = {
 
 const ExportService = {
     async generateCSV(data) {
-        let csv = 'Account,Konfiguration,Config ID,Entitlement Serial,Produkt,Status,Punkte\n';
+        let csv = 'Account,Configuration,Config ID,Entitlement Serial,Product,Status,Points\n';
 
         for (const program of data.programs) {
             const programSerial = program.serialNumber;
@@ -614,14 +614,14 @@ const ExportService = {
                 </style>
             </head>
             <body>
-                <h1>FortiToken Reporting - Entitlements Übersicht</h1>
-                <p style="text-align: center; color: #666;">Generiert am: ${new Date().toLocaleDateString('de-DE')} ${new Date().toLocaleTimeString('de-DE')}</p>
+                <h1>FortiToken Reporting - Entitlements Overview</h1>
+                <p style="text-align: center; color: #666;">Generated on: ${new Date().toLocaleDateString('de-DE')} ${new Date().toLocaleTimeString('de-DE')}</p>
                 
                 <div style="border: 1px solid #ddd; padding: 15px; margin: 20px 0;">
-                    <h3 style="margin-top: 0;">📊 Zusammenfassung</h3>
+                    <h3 style="margin-top: 0;">📊 Summary</h3>
                     <div class="stat"><div class="stat-value">${data.accounts.length}</div><div>Accounts</div></div>
-                    <div class="stat"><div class="stat-value">${data.programs.length}</div><div>Programme</div></div>
-                    <div class="stat"><div class="stat-value">${Object.values(data.configurations).flat().length}</div><div>Konfigurationen</div></div>
+                    <div class="stat"><div class="stat-value">${data.programs.length}</div><div>Programs</div></div>
+                    <div class="stat"><div class="stat-value">${Object.values(data.configurations).flat().length}</div><div>Configurations</div></div>
                     <div class="stat"><div class="stat-value">${Object.values(data.entitlements).flat().length}</div><div>Entitlements</div></div>
                 </div>
         `;
@@ -650,15 +650,15 @@ const ExportService = {
             }
         }
 
-        htmlContent += `<h2>📋 Entitlements nach Account und Konfiguration</h2>`;
+        htmlContent += `<h2>📋 Entitlements for accounts and configurations</h2>`;
         htmlContent += `<table>
             <tr>
                 <th>Account</th>
-                <th>Konfiguration</th>
+                <th>Configuration</th>
                 <th>Entitlement Serial</th>
-                <th>Produkt</th>
+                <th>Product</th>
                 <th>Status</th>
-                <th>Punkte</th>
+                <th>Points</th>
             </tr>`;
 
         for (const key in groupedData) {
@@ -886,18 +886,18 @@ const App = {
     handleApplyDateRange() {
         this.dateRange = this.getDateRangeFromInputs();
         if (this.dateRange.startDate && this.dateRange.endDate && this.dateRange.startDate > this.dateRange.endDate) {
-            this.showLoginError('Das Startdatum darf nicht nach dem Enddatum liegen.');
+            this.showLoginError('The start date cannot be after the end date.');
             return;
         }
         this.loadDashboard();
     },
 
     handleClearCookies() {
-        if (confirm('Cookies wirklich löschen? Sie müssen sich dann erneut anmelden.')) {
+        if (confirm('Really delete cookies? You will need to log in again.')) {
             CookieManager.clear();
             document.getElementById('username').value = '';
             document.getElementById('password').value = '';
-            this.showLoginSuccess('Cookies gelöscht');
+            this.showLoginSuccess('Cookies deleted');
         }
     },
 
@@ -910,35 +910,35 @@ const App = {
         document.getElementById('username').value = '';
         document.getElementById('password').value = '';
         document.getElementById('password').focus();
-        this.showLoginSuccess('Erfolgreich abgemeldet');
+        this.showLoginSuccess('Successfully logged out');
     },
 
     handleExportCSV() {
         if (!this.currentData) {
-            this.showLoginError('Keine Daten zum Exportieren vorhanden');
+            this.showLoginError('No data available for export');
             return;
         }
         ExportService.downloadCSV(this.currentData);
-        this.showLoginSuccess('CSV-Export erfolgreich gestartet');
+        this.showLoginSuccess('CSV export started successfully');
     },
 
     handleExportPDF() {
         if (!this.currentData) {
-            this.showLoginError('Keine Daten zum Exportieren vorhanden');
+            this.showLoginError('No data available for export');
             return;
         }
         ExportService.downloadPDF(this.currentData);
-        this.showLoginSuccess('PDF-Export erfolgreich gestartet');
+        this.showLoginSuccess('PDF export started successfully');
     },
 
     showLoading(show) {
         document.getElementById('loading').style.display = show ? 'block' : 'none';
         if (!show) {
-            this.updateLoadingStatus('Authentifizierung läuft...', 'Bitte warten Sie kurz.');
+            this.updateLoadingStatus('Authentication in progress...', 'Please wait a moment.');
         }
     },
 
-    updateLoadingStatus(status, substatus = 'Bitte warten Sie kurz.') {
+    updateLoadingStatus(status, substatus = 'Please wait a moment.') {
         const statusEl = document.getElementById('loadingStatus');
         const substatusEl = document.getElementById('loadingSubstatus');
         if (statusEl) statusEl.textContent = status;
