@@ -427,6 +427,7 @@ const UIRenderer = {
                 if (entitlements.length === 0) {
                     configEntitlements.push({
                         entitlementSerial: 'N/A',
+                        description: 'N/A',
                         status: status,
                         points: 0,
                         startDate: startDate,
@@ -449,6 +450,7 @@ const UIRenderer = {
                         
                         configEntitlements.push({
                             entitlementSerial: ent.serialNumber || 'N/A',
+                            description: ent.description || 'N/A',
                             status: entitlementStatus,
                             points: entitlementPoints,
                             startDate: startDate,
@@ -541,38 +543,16 @@ const UIRenderer = {
 // ============================================================================
 
 const ExportService = {
-    async generateCSV(data) {
-        let csv = 'Account,Configuration,Config ID,Entitlement Serial,Product,Status,Points\n';
+    async generateCSV(groupedData) {
+        let csv = 'Configuration,Config ID,Product,Entitlement Serial,Description,Status,Start Date,End Date,Points\n';
 
-        for (const program of data.programs) {
-            const programSerial = program.serialNumber;
-            const configs = data.configurations[programSerial] || [];
-            
-            for (const config of configs) {
-                const accountId = config.accountId ?? 'unassigned';
-                const accountLabel = UIRenderer.getAccountDisplayName(data, accountId === 'unassigned' ? 'N/A' : accountId);
-                const entitlements = data.entitlements[config.id] || [];
-                const configPointsData = data.pointsData[config.id] || [];
-                
-                if (entitlements.length === 0) {
-                    csv += `"${accountLabel}","${config.name}","${config.id}","N/A","${config.productType?.name || 'N/A'}","${config.status || 'N/A'}",0\n`;
-                } else {
-                    for (const ent of entitlements) {
-                        // Filter out NOTUSED entitlements
-                        if (ent.tokenStatus === 'NOTUSED') {
-                            continue;
-                        }
-
-                        // Look for matching points data by serial number
-                        const matchingPointsData = configPointsData.find(p => p.serialNumber === ent.serialNumber);
-                        const points = UIRenderer.getPointValue(matchingPointsData || ent);
-                        const roundedPoints = Math.round(points * 10) / 10;
-                        
-                        // Use entitlement's own status if available, otherwise use config status
-                        const entitlementStatus = ent.status || config.status || 'N/A';
-                        
-                        csv += `"${accountLabel}","${config.name}","${config.id}","${ent.serialNumber}","${config.productType?.name || 'N/A'}","${entitlementStatus}","${roundedPoints.toString().replace('.', ',')}\n`;
-                    }
+        // Iterate through all accounts and their configurations
+        for (const [accountLabel, accountGroup] of groupedData) {
+            for (const [configId, configData] of accountGroup.configs) {
+                // Export each entitlement as a row
+                for (const entitlement of configData.entitlements) {
+                    const points = entitlement.points.toString().replace('.', ',');
+                    csv += `"${configData.configName}","${configData.configId}","${configData.productName}","${entitlement.entitlementSerial}","${entitlement.description}","${entitlement.status}","${entitlement.startDate}","${entitlement.endDate}","${points}"\n`;
                 }
             }
         }
@@ -594,131 +574,7 @@ const ExportService = {
         });
     },
 
-    async downloadPDF(data) {
-        // Create HTML content for PDF
-        let htmlContent = `
-            <html>
-            <head>
-                <meta charset="UTF-8">
-                <style>
-                    body { font-family: Arial, sans-serif; margin: 20px; }
-                    h1 { color: #667eea; text-align: center; }
-                    h2 { color: #764ba2; margin-top: 30px; border-bottom: 2px solid #667eea; padding-bottom: 10px; }
-                    h3 { color: #333; margin-top: 15px; }
-                    table { width: 100%; border-collapse: collapse; margin: 15px 0; }
-                    th, td { border: 1px solid #ddd; padding: 8px; text-align: left; }
-                    th { background-color: #667eea; color: white; }
-                    tr:nth-child(even) { background-color: #f9f9f9; }
-                    .stat { display: inline-block; width: 20%; text-align: center; padding: 10px; }
-                    .stat-value { font-size: 20px; font-weight: bold; color: #667eea; }
-                </style>
-            </head>
-            <body>
-                <h1>FortiToken Reporting - Entitlements Overview</h1>
-                <p style="text-align: center; color: #666;">Generated on: ${new Date().toLocaleDateString('de-DE')} ${new Date().toLocaleTimeString('de-DE')}</p>
-                
-                <div style="border: 1px solid #ddd; padding: 15px; margin: 20px 0;">
-                    <h3 style="margin-top: 0;">📊 Summary</h3>
-                    <div class="stat"><div class="stat-value">${data.accounts.length}</div><div>Accounts</div></div>
-                    <div class="stat"><div class="stat-value">${data.programs.length}</div><div>Programs</div></div>
-                    <div class="stat"><div class="stat-value">${Object.values(data.configurations).flat().length}</div><div>Configurations</div></div>
-                    <div class="stat"><div class="stat-value">${Object.values(data.entitlements).flat().length}</div><div>Entitlements</div></div>
-                </div>
-        `;
 
-        // Group by Account and Configuration
-        const groupedData = {};
-        for (const program of data.programs) {
-            const programSerial = program.serialNumber;
-            const configs = data.configurations[programSerial] || [];
-            
-            for (const config of configs) {
-                const accountId = config.accountId ?? 'unassigned';
-                const accountLabel = UIRenderer.getAccountDisplayName(data, accountId === 'unassigned' ? 'N/A' : accountId);
-                const key = `${accountLabel}|${config.name}`;
-                
-                if (!groupedData[key]) {
-                    groupedData[key] = {
-                        account: accountLabel,
-                        config: config.name,
-                        configId: config.id,
-                        product: config.productType?.name || 'N/A',
-                        status: config.status || 'N/A',
-                        entitlements: data.entitlements[config.id] || []
-                    };
-                }
-            }
-        }
-
-        htmlContent += `<h2>📋 Entitlements for accounts and configurations</h2>`;
-        htmlContent += `<table>
-            <tr>
-                <th>Account</th>
-                <th>Configuration</th>
-                <th>Entitlement Serial</th>
-                <th>Product</th>
-                <th>Status</th>
-                <th>Points</th>
-            </tr>`;
-
-        for (const key in groupedData) {
-            const group = groupedData[key];
-            const entitlements = group.entitlements;
-            const configPointsData = data.pointsData[group.configId] || [];
-            
-            // Filter out NOTUSED entitlements
-            const filteredEntitlements = entitlements.filter(ent => ent.tokenStatus !== 'NOTUSED');
-            
-            if (filteredEntitlements.length === 0) {
-                htmlContent += `
-                    <tr>
-                        <td>${group.account}</td>
-                        <td>${group.config}</td>
-                        <td>N/A</td>
-                        <td>${group.product}</td>
-                        <td>${group.status}</td>
-                        <td>0,0</td>
-                    </tr>
-                `;
-            } else {
-                
-                for (let i = 0; i < filteredEntitlements.length; i++) {
-                    const ent = filteredEntitlements[i];
-                    // Look for matching points data by serial number
-                    const matchingPointsData = configPointsData.find(p => p.serialNumber === ent.serialNumber);
-                    const points = UIRenderer.getPointValue(matchingPointsData || ent);
-                    const roundedPoints = Math.round(points * 10) / 10;
-                    const pointsStr = roundedPoints.toLocaleString('de-DE', { minimumFractionDigits: 1, maximumFractionDigits: 1 });
-                    
-                    // Use entitlement's own status if available, otherwise use config status
-                    const entitlementStatus = ent.status || group.status;
-                    
-                    htmlContent += `
-                        <tr>
-                            ${i === 0 ? `<td rowspan="${filteredEntitlements.length}">${group.account}</td>` : ''}
-                            ${i === 0 ? `<td rowspan="${filteredEntitlements.length}">${group.config}</td>` : ''}
-                            <td>${ent.serialNumber}</td>
-                            ${i === 0 ? `<td rowspan="${filteredEntitlements.length}">${group.product}</td>` : ''}
-                            ${i === 0 ? `<td rowspan="${filteredEntitlements.length}">${entitlementStatus}</td>` : ''}
-                            <td>${pointsStr}</td>
-                        </tr>
-                    `;
-                }
-            }
-        }
-
-        htmlContent += `</table>`;
-        htmlContent += `
-            </body>
-            </html>
-        `;
-
-        // Use print functionality
-        const printWindow = window.open('', '_blank');
-        printWindow.document.write(htmlContent);
-        printWindow.document.close();
-        setTimeout(() => printWindow.print(), 250);
-    }
 };
 
 // ============================================================================
@@ -739,7 +595,6 @@ const App = {
         document.getElementById('clearCookies').addEventListener('click', () => this.handleClearCookies());
         document.getElementById('logout').addEventListener('click', () => this.handleLogout());
         document.getElementById('exportCSV').addEventListener('click', () => this.handleExportCSV());
-        document.getElementById('exportPDF').addEventListener('click', () => this.handleExportPDF());
         document.getElementById('applyDateRange').addEventListener('click', () => this.handleApplyDateRange());
     },
 
@@ -914,22 +769,15 @@ const App = {
     },
 
     handleExportCSV() {
-        if (!this.currentData) {
+        if (!TableManager.currentData) {
             this.showLoginError('No data available for export');
             return;
         }
-        ExportService.downloadCSV(this.currentData);
+        ExportService.downloadCSV(TableManager.currentData);
         this.showLoginSuccess('CSV export started successfully');
     },
 
-    handleExportPDF() {
-        if (!this.currentData) {
-            this.showLoginError('No data available for export');
-            return;
-        }
-        ExportService.downloadPDF(this.currentData);
-        this.showLoginSuccess('PDF export started successfully');
-    },
+
 
     showLoading(show) {
         document.getElementById('loading').style.display = show ? 'block' : 'none';
@@ -982,7 +830,7 @@ const TableManager = {
         tbody.innerHTML = '';
 
         if (groupedData.size === 0) {
-            tbody.innerHTML = '<tr><td colspan="8" style="text-align: center; padding: 40px; color: #999;">Keine Daten verfügbar</td></tr>';
+            tbody.innerHTML = '<tr><td colspan="9" style="text-align: center; padding: 40px; color: #999;">Keine Daten verfügbar</td></tr>';
             return;
         }
 
@@ -1003,7 +851,7 @@ const TableManager = {
                     <strong>🏢 ${accountLabel}</strong>
                 </td>
                 <td><code>${accountGroup.accountId}</code></td>
-                <td colspan="5"></td>
+                <td colspan="6"></td>
                 <td>${this.formatPoints(accountGroup.accountTotal)}</td>
             `;
             tbody.appendChild(accountHeaderRow);
@@ -1025,7 +873,7 @@ const TableManager = {
                     </td>
                     <td><code>${configData.configId}</code></td>
                     <td>${configData.productName}</td>
-                    <td colspan="4"></td>
+                    <td colspan="5"></td>
                     <td>${this.formatPoints(configData.configTotal)}</td>
                 `;
                 tbody.appendChild(configHeaderRow);
@@ -1040,6 +888,7 @@ const TableManager = {
                         <td><code>${configData.configId}</code></td>
                         <td>${configData.productName}</td>
                         <td><code>${entitlement.entitlementSerial}</code></td>
+                        <td>${entitlement.description}</td>
                         <td>${this.getStatusBadge(entitlement.status)}</td>
                         <td>${entitlement.startDate}</td>
                         <td>${entitlement.endDate}</td>

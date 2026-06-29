@@ -147,6 +147,10 @@
             box-shadow: 0 2px 6px rgba(0, 102, 204, 0.3);
         }
 
+        #exportPDF {
+            display: none;
+        }
+
         .loading {
             display: none;
             position: fixed;
@@ -156,6 +160,10 @@
             padding: 20px;
             background: rgba(15, 23, 42, 0.45);
             z-index: 1000;
+        }
+
+        .loading[style*="display: block"] {
+            display: flex !important;
         }
 
         .loading-panel {
@@ -706,7 +714,6 @@
                 </div>
                 <div class="export-buttons">
                     <button class="btn-export" id="exportCSV">CSV Export</button>
-                    <button class="btn-export" id="exportPDF">PDF Export</button>
                     <button class="btn-export" id="logout">Logout</button>
                 </div>
             </div>
@@ -736,6 +743,7 @@
                             <th>ID</th>
                             <th>Product</th>
                             <th>Serial / Entitlement</th>
+                            <th>Description</th>
                             <th>Status</th>
                             <th>Start Date</th>
                             <th>End Date</th>
